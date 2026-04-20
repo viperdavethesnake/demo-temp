@@ -25,3 +25,24 @@ Two issues found and fixed during bring-up:
 Throughput: 10K files in 2.1s = **~4,800 rows/s steady state** (first batch warm-up ~2,500/s). Projected full walk: ~35 min single-threaded. Parallelism not pursued — complexity not worth the ~5-10 min saving.
 
 Physical sum per 10K files: 1.16 GiB → extrapolated 1.16 TB for full dataset. Matches the ~1.2 TB target.
+
+---
+
+## 2026-04-20 — Full walk
+
+- **run_id:** `c915d505-3f5b-4bae-963b-c521b7fd63e3-1776679196233`
+- **Elapsed:** 678.5 s (~11.3 min) — ~3× faster than the 10K-file extrapolation predicted
+- **Steady-state rate:** 14,683 rows/s (batches of 25,000)
+- **Rows inserted:** 9,962,001 (exact match to expected; `missing = 0`)
+- **Errors:** 0 (zero MISSING, zero WIN32, zero batch retries)
+- **Logical total:** 77.87 TiB (from scan_results, unchanged)
+- **Physical total:** **1.13 TiB** (1.24 TB decimal) — within expectation vs generator's ~1.2 TB
+- **Ratio:** 0.0145 (1.45 % physical/logical)
+
+**Distribution confirms the generator's pattern at scale.** 9,015,627 files (90.5 %) allocate exactly 128 KiB — the sparse-file floor on this volume. The remaining ~947K files spread roughly evenly across 1-127 KiB — these are below the 128 KiB floor, so stored 1:1.
+
+**Dashboard join performance.** The LEFT ANY JOIN with `argMax` subquery (per `CLICKHOUSE.md` §5.1) runs in ~14 s over 9.96 M rows. Acceptable for a stat tile that loads once per page view. If we ever need sub-second interactivity, two independent `sum()` aggregates (one per tile) will fly, or we escalate to the dictionary pattern (§5.2).
+
+**Runtime artifacts:** `walker-errors.log` holds only the start/end session markers. No rows in `failed-batches/`.
+
+**Table size on disk.** 9.96 M rows compress to **90.47 MiB** (1.56 GiB uncompressed). LZ4 + LowCardinality isn't in play here — default MergeTree codecs are doing the work. No need to tune.
