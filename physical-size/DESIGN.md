@@ -134,13 +134,15 @@ Carrying forward from `docs/prompts/real-size.md`:
 
 ## 7. Execution order
 
-1. ~~5-min Scan Policy wizard check~~ — **done 2026-04-20**. Symphony's Scan Policy has no native allocated/physical-size field. Evidence: `scan_results` schema has one `size UInt64` (no `allocated`/`physical`/`on_disk` column); admin guide §G.3.2–§G.3.3 describe "file metadata export to database" with zero mention of physical/allocated/compressed size. Walker is required.
-2. Create `symphony.file_physical` table (SQL file in this folder — schema in `CLICKHOUSE.md` §2).
-3. Write `probe-physical-size.ps1`; smoke-test on the same 20 URIs as the 2026-04-20 probe.
-4. Full walk of active `run_id` (`c915d505-3f5b-4bae-963b-c521b7fd63e3-1776679196233`) — 9,962,001 files after excluding 2,692 directory rows. Capture wall-clock and error-row count.
-5. Run validation checks (§4 here and `CLICKHOUSE.md` §7).
-6. Prototype the side-by-side Logical/On-Disk tiles on `sym-exec`.
-7. Decide which other panels get `$size_metric` vs stay logical-only.
+Steps 1–5 complete as of 2026-04-20. See `NOTES.md` for the run log and `README.md` for the headline numbers.
+
+1. ~~5-min Scan Policy wizard check.~~ **Done** — Symphony's Scan Policy has no native allocated/physical-size field. Evidence: `scan_results` schema has one `size UInt64` (no `allocated`/`physical`/`on_disk` column); admin guide §G.3.2–§G.3.3 describe "file metadata export to database" with zero mention of physical/allocated/compressed size. Walker is required.
+2. ~~Create `symphony.file_physical` table.~~ **Done** — DDL in `schema.sql`, applied to `localhost:8123`.
+3. ~~Write `probe-physical-size.ps1`; smoke-test.~~ **Done** — 1K-file and 10K-file smokes passed, three bring-up fixes captured in `NOTES.md` (format-operator precedence inside `.Add()`, explicit INSERT column list for DEFAULT'd `probed_at`, `Console.In.EndOfStream` replaced with `ReadLine() != $null`).
+4. ~~Full walk.~~ **Done** — 9,962,001 files probed in 678.5 s at 14,683 rows/s, zero errors, zero missing.
+5. ~~Validation.~~ **Done** — physical total 1.13 TiB against ~1.2 TB target; coverage 100 %; distribution matches expectation (90.5 % of files at the 128 KiB sparse floor).
+6. **Next:** prototype the side-by-side Logical / On-Disk tiles on `sym-exec` (query pattern in `validation.sql`).
+7. **Next:** decide which other panels get `$size_metric` vs stay logical-only.
 
 ## 8. Files this folder will hold
 

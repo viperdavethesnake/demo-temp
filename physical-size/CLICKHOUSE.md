@@ -230,9 +230,9 @@ GROUP BY allocated
 ORDER BY allocated;
 ```
 
-## 8. Facts confirmed today (2026-04-20)
+## 8. Facts confirmed (2026-04-20)
 
-Single source of truth for the numbers this plan is built on:
+Single source of truth for the numbers this plan is built on. Pre-walk survey values are preserved; post-walk observed values are added alongside.
 
 | Fact | Value | Source |
 |---|---|---|
@@ -245,7 +245,14 @@ Single source of truth for the numbers this plan is built on:
 | Max file_uri length | 144 chars | `max(length(file_uri))` — no `\\?\` prefix needed |
 | Non-ASCII paths | 0 | safe to treat URIs as ASCII |
 | URL-encoded paths | 625,689 (6.3 %) | `UnescapeDataString` required in walker |
-| NTFS cluster size on S: | 4 KB (`fsutil fsinfo ntfsinfo S:`) |  |
-| Observed sparse allocation | flat 128 KB = 32 clusters | 20-file probe |
+| NTFS cluster size on S: | 4 KB | `fsutil fsinfo ntfsinfo S:` |
+| Observed sparse allocation (probe) | flat 128 KB = 32 clusters | 20-file probe |
 | Expected physical total | ~1.2 TB (generator) / 1.28 TB (math: 10M × 128 KB) | dataset-snapshot.md + probe extrapolation |
-| Symphony native allocated-size support | **none** (schema has one `size UInt64`; admin guide §G.3.2–§G.3.3 makes no mention of physical/allocated/compressed size fields) | direct check |
+| Symphony native allocated-size support | **none** | schema + admin guide §G.3.2–§G.3.3 |
+| **Post-walk — rows in file_physical** | **9,962,001** (zero missing, zero errors) | validation.sql coverage query |
+| **Post-walk — physical total** | **1.13 TiB** (1.24 TB decimal) | `sum(allocated)` |
+| **Post-walk — physical/logical ratio** | **0.0145** (1.45 %) | validation.sql ratio query |
+| **Post-walk — files at exactly 128 KiB** | 9,015,627 (90.5 %) | validation.sql distribution query |
+| **Post-walk — walk duration** | 678.5 s (~11.3 min) at 14,683 rows/s | load-physical-size.sh elapsed |
+| **Post-walk — table size on disk** | 90.47 MiB compressed (1.56 GiB uncompressed) | `system.parts` |
+| **Post-walk — dashboard join latency** | ~14 s end-to-end (LEFT ANY JOIN + argMax over 9.96 M rows) | `validation.sql` sym-exec tile pair |
