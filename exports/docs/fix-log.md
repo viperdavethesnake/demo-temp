@@ -142,6 +142,57 @@ Pie legend values: 57.4 + 14.9 + 3.12 + 2.52 = 77.94 TiB. Matches overview.csv t
 
 ---
 
-## 2026-04-20 — Phase 1 apply #2 (this commit)
+## 2026-04-20 — Phase 1 apply #2 (commit `c232f6d`)
 
-One-line SQL change on sym-exec panel id=4 to fix Oldest Modified. Items 4–5 not in this commit — separate concern, separate push.
+One-line SQL change on sym-exec panel id=4: `SELECT toUnixTimestamp64Milli(min(modified)) AS oldest`. Render report from Claude Code:
+
+| Change | Expected | Actual | Status |
+|---|---|---|---|
+| Oldest Modified | "N years ago" | "10 years ago" (red) | ✅ fixed |
+| B / W / pie | no regression | 92.6% B, 4.06% W, pie 4 slices unchanged | ✅ |
+
+"10 years ago" matches min modified of 2016-04-20 exactly against today's 2026-04-20. Phase 1 items 1–3 all green.
+
+---
+
+## 2026-04-20 — Phase 1 apply #3 (this commit): item 0b
+
+### Creation Year Distribution panel (id=10)
+
+Added below the pie+barchart row on sym-exec. Panel spec:
+
+- Type: `barchart`
+- gridPos: `{x:0, y:16, w:24, h:8}` — full width, below the pie/owners row.
+- SQL: `SELECT toString(toYear(created)) AS year, count() AS files FROM symphony.scan_results WHERE run_id='$run_id' AND toYear(created) BETWEEN 2015 AND 2027 GROUP BY year ORDER BY year`
+- `toString(...)` forces categorical x-axis (prevents Grafana from drawing 2016.5 etc.).
+- Unit: `short` (file counts).
+- Description text (customer-generic): *"2019 shows a notable ~9.6% bulge vs. 3–4% in surrounding years. Investigate origin (acquisition? migration? policy change?)."* Shows as hover-? icon next to panel title. Demo-specific "Deadbeat Corp" framing intentionally not used — this wording is VAR-deliverable safe.
+
+### Expected values (from year-distribution.csv)
+
+| year | files | % |
+|---|---:|---:|
+| 2016 | 417,816 | 4.19% |
+| 2017 | 354,276 | 3.56% |
+| 2018 | 393,860 | 3.95% |
+| **2019** | **958,842** | **9.62%** |
+| 2020 | 428,981 | 4.31% |
+| 2021 | 1,717,868 | 17.24% |
+| 2022 | 2,457,713 | 24.66% |
+| 2023 | 1,449,935 | 14.55% |
+| 2024 | 768,442 | 7.71% |
+| 2025 | 669,857 | 6.72% |
+| 2026 | 347,103 | 3.48% |
+
+2019 is the bulge relative to its neighbours. The 2021–2023 peak is a generator artifact (Dormant / LegacyArchive classes pin creation to Now-3y..5y) — documented but not a "storyline" per the generator's demo-narrative.
+
+### Item 0d (dept-bytes viz) paused
+
+User decision: install the `marcusolsson-treemap-panel` Grafana plugin first, so 0d ships as a treemap right away rather than as a bar chart that later gets upgraded. See Claude Code prompt in chat.
+
+---
+
+## Phase 1 remaining
+
+- 0d dept-bytes treemap on sym-exec — pending plugin install on sym02.
+- (Then Phase 1 for sym-ops, sym-cfo, sym-arch per the original persona order.)
