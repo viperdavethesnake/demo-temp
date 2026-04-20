@@ -63,6 +63,23 @@
       "targets": [{"editorType":"sql","format":1,"queryType":"table","rawSql":"SELECT extension, count() AS files, sum(size) AS bytes, (sum(size)/pow(1024,4))*($hot_rate - $archive_rate) AS savings_usd_mo FROM symphony.scan_results WHERE run_id='$run_id' AND last_accessed < now()-INTERVAL 3 YEAR GROUP BY extension ORDER BY bytes DESC LIMIT 20","refId":"A"}],
       "title": "Frozen Capacity by Extension",
       "type": "table"
+    },
+    {
+      "datasource": {"type":"grafana-clickhouse-datasource","uid":"clickhouse"},
+      "description": "Capacity attributed to each DEMO\\GG_* dept group. Files owned by non-GG_* accounts (service accounts, built-in admins, individual users, orphans) and DEMO\\GG_AllEmployees are bucketed as UNATTRIBUTABLE — matches Symphony's native Chargeback Report (page 7 of the PDF).",
+      "fieldConfig": {"defaults":{"color":{"mode":"palette-classic"},"unit":"bytes"}},
+      "gridPos": {"h":9,"w":12,"x":12,"y":13},
+      "id": 8,
+      "options": {
+        "reduceOptions":{"values":true,"calcs":[],"fields":""},
+        "legend":{"displayMode":"table","placement":"right","showLegend":true,"values":["value","percent"]},
+        "displayLabels":["percent"],
+        "pieType":"donut",
+        "tooltip":{"mode":"single"}
+      },
+      "targets": [{"editorType":"sql","format":1,"queryType":"table","rawSql":"SELECT multiIf(owner_name LIKE 'DEMO\\\\GG_%' AND owner_name != 'DEMO\\\\GG_AllEmployees', owner_name, 'UNATTRIBUTABLE') AS chargeback_group, sum(size) AS bytes FROM symphony.scan_results WHERE run_id='$run_id' GROUP BY chargeback_group ORDER BY bytes DESC","refId":"A"}],
+      "title": "Chargeback by Dept Group (matches Symphony native)",
+      "type": "piechart"
     }
   ],
   "schemaVersion": 39,

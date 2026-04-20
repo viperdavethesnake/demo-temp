@@ -1,1 +1,93 @@
-{"id":null,"panels":[{"datasource":{"type":"grafana-clickhouse-datasource","uid":"clickhouse"},"fieldConfig":{"defaults":{"unit":"bytes"}},"gridPos":{"h":10,"w":12,"x":0,"y":0},"id":1,"targets":[{"editorType":"sql","format":1,"queryType":"table","rawSql":"SELECT splitByChar(\u0027/\u0027, file_path)[4] AS top_folder, sum(size) AS bytes FROM symphony.scan_results WHERE run_id=\u0027$run_id\u0027 AND top_folder != \u0027\u0027 GROUP BY top_folder ORDER BY bytes DESC LIMIT 20","refId":"A"}],"title":"Top-Level Folders by Capacity","type":"barchart"},{"datasource":{"type":"grafana-clickhouse-datasource","uid":"clickhouse"},"gridPos":{"h":10,"w":12,"x":12,"y":0},"id":2,"targets":[{"editorType":"sql","format":1,"queryType":"table","rawSql":"SELECT multiIf(size\u003c1024,\u0027\u003c1K\u0027, size\u003c1048576,\u00271K-1M\u0027, size\u003c1073741824,\u00271M-1G\u0027, size\u003c1099511627776,\u00271G-1T\u0027,\u0027\u003e1T\u0027) AS bucket, count() AS files, sum(size) AS bytes FROM symphony.scan_results WHERE run_id=\u0027$run_id\u0027 GROUP BY bucket ORDER BY min(size)","refId":"A"}],"title":"File Size Distribution (log buckets)","type":"barchart"},{"datasource":{"type":"grafana-clickhouse-datasource","uid":"clickhouse"},"fieldConfig":{"defaults":{},"overrides":[{"matcher":{"id":"byRegexp","options":".*_b$"},"properties":[{"id":"unit","value":"bytes"}]}]},"gridPos":{"h":10,"w":24,"x":0,"y":10},"id":3,"targets":[{"editorType":"sql","format":1,"queryType":"table","rawSql":"SELECT extension, sumIf(size, modified\u003enow()-INTERVAL 90 DAY) AS active_b, sumIf(size, modified\u003c=now()-INTERVAL 90 DAY AND modified\u003enow()-INTERVAL 365 DAY) AS warm_b, sumIf(size, modified\u003c=now()-INTERVAL 365 DAY AND modified\u003enow()-INTERVAL 3 YEAR) AS cold_b, sumIf(size, modified\u003c=now()-INTERVAL 3 YEAR) AS frozen_b FROM symphony.scan_results WHERE run_id=\u0027$run_id\u0027 GROUP BY extension ORDER BY (active_b+warm_b+cold_b+frozen_b) DESC LIMIT 25","refId":"A"}],"title":"Extension × Age Matrix (capacity)","type":"table"},{"datasource":{"type":"grafana-clickhouse-datasource","uid":"clickhouse"},"fieldConfig":{"defaults":{},"overrides":[{"matcher":{"id":"byName","options":"bytes"},"properties":[{"id":"unit","value":"bytes"}]}]},"gridPos":{"h":10,"w":12,"x":0,"y":20},"id":4,"targets":[{"editorType":"sql","format":1,"queryType":"table","rawSql":"SELECT splitByChar(\u0027/\u0027, file_path)[4] AS top_folder, count() AS files, sum(size) AS bytes FROM symphony.scan_results WHERE run_id=\u0027$run_id\u0027 AND modified \u003c now()-INTERVAL 3 YEAR AND top_folder != \u0027\u0027 GROUP BY top_folder ORDER BY bytes DESC LIMIT 25","refId":"A"}],"title":"Cold Capacity — Top Folders (candidates to archive)","type":"table"},{"datasource":{"type":"grafana-clickhouse-datasource","uid":"clickhouse"},"fieldConfig":{"defaults":{},"overrides":[{"matcher":{"id":"byName","options":"wasted_bytes"},"properties":[{"id":"unit","value":"bytes"}]}]},"gridPos":{"h":10,"w":12,"x":12,"y":20},"id":5,"targets":[{"editorType":"sql","format":1,"queryType":"table","rawSql":"SELECT filename, size, count() AS copies, (count()-1)*size AS wasted_bytes FROM symphony.scan_results WHERE run_id=\u0027$run_id\u0027 AND size \u003e 1048576 GROUP BY filename, size HAVING copies \u003e 1 ORDER BY wasted_bytes DESC LIMIT 50","refId":"A"}],"title":"Name+Size Duplicate Clusters (wasted bytes)","type":"table"},{"datasource":{"type":"grafana-clickhouse-datasource","uid":"clickhouse"},"gridPos":{"h":8,"w":24,"x":0,"y":30},"id":6,"targets":[{"editorType":"sql","format":1,"queryType":"table","rawSql":"SELECT toString(least(countSubstrings(acl,\u0027;\u0027), 40)) AS ace_count, count() AS files FROM symphony.scan_results WHERE run_id=\u0027$run_id\u0027 GROUP BY ace_count ORDER BY toUInt32(ace_count)","refId":"A"}],"title":"ACL Complexity — Semicolons per ACL (proxy for ACE count)","type":"barchart"}],"schemaVersion":39,"tags":["symphony","architect"],"templating":{"list":[{"datasource":{"type":"grafana-clickhouse-datasource","uid":"clickhouse"},"name":"run_id","query":"SELECT run_id FROM symphony.scan_results GROUP BY run_id ORDER BY max(run_start_time) DESC","refresh":1,"type":"query"}]},"time":{"from":"now-7d","to":"now"},"timezone":"browser","title":"Symphony — Storage Architect","uid":"sym-arch","version":1}
+{
+  "id": null,
+  "panels": [
+    {
+      "datasource": {"type":"grafana-clickhouse-datasource","uid":"clickhouse"},
+      "fieldConfig": {"defaults":{"unit":"bytes"}},
+      "gridPos": {"h":10,"w":12,"x":0,"y":0},
+      "id": 1,
+      "targets": [{"editorType":"sql","format":1,"queryType":"table","rawSql":"SELECT splitByChar('/', file_path)[4] AS top_folder, sum(size) AS bytes FROM symphony.scan_results WHERE run_id='$run_id' AND top_folder != '' GROUP BY top_folder ORDER BY bytes DESC LIMIT 20","refId":"A"}],
+      "title": "Top-Level Folders by Capacity",
+      "type": "barchart"
+    },
+    {
+      "datasource": {"type":"grafana-clickhouse-datasource","uid":"clickhouse"},
+      "gridPos": {"h":10,"w":12,"x":12,"y":0},
+      "id": 2,
+      "targets": [{"editorType":"sql","format":1,"queryType":"table","rawSql":"SELECT multiIf(size<1024,'<1K', size<1048576,'1K-1M', size<1073741824,'1M-1G', size<1099511627776,'1G-1T','>1T') AS bucket, count() AS files, sum(size) AS bytes FROM symphony.scan_results WHERE run_id='$run_id' GROUP BY bucket ORDER BY min(size)","refId":"A"}],
+      "title": "File Size Distribution (log buckets)",
+      "type": "barchart"
+    },
+    {
+      "datasource": {"type":"grafana-clickhouse-datasource","uid":"clickhouse"},
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {"matcher":{"id":"byName","options":"active_b"},"properties":[{"id":"unit","value":"bytes"},{"id":"displayName","value":"Active"}]},
+          {"matcher":{"id":"byName","options":"warm_b"},"properties":[{"id":"unit","value":"bytes"},{"id":"displayName","value":"Warm"}]},
+          {"matcher":{"id":"byName","options":"cold_b"},"properties":[{"id":"unit","value":"bytes"},{"id":"displayName","value":"Cold"}]},
+          {"matcher":{"id":"byName","options":"frozen_b"},"properties":[{"id":"unit","value":"bytes"},{"id":"displayName","value":"Frozen"}]},
+          {"matcher":{"id":"byName","options":"extension"},"properties":[{"id":"displayName","value":"Extension"}]}
+        ]
+      },
+      "gridPos": {"h":10,"w":24,"x":0,"y":10},
+      "id": 3,
+      "targets": [{"editorType":"sql","format":1,"queryType":"table","rawSql":"SELECT extension, sumIf(size, modified>now()-INTERVAL 90 DAY) AS active_b, sumIf(size, modified<=now()-INTERVAL 90 DAY AND modified>now()-INTERVAL 365 DAY) AS warm_b, sumIf(size, modified<=now()-INTERVAL 365 DAY AND modified>now()-INTERVAL 3 YEAR) AS cold_b, sumIf(size, modified<=now()-INTERVAL 3 YEAR) AS frozen_b FROM symphony.scan_results WHERE run_id='$run_id' GROUP BY extension ORDER BY (active_b+warm_b+cold_b+frozen_b) DESC LIMIT 25","refId":"A"}],
+      "title": "Extension × Age Matrix (capacity, by modified)",
+      "type": "table"
+    },
+    {
+      "datasource": {"type":"grafana-clickhouse-datasource","uid":"clickhouse"},
+      "fieldConfig": {"defaults":{},"overrides":[{"matcher":{"id":"byName","options":"bytes"},"properties":[{"id":"unit","value":"bytes"}]}]},
+      "gridPos": {"h":10,"w":12,"x":0,"y":20},
+      "id": 4,
+      "targets": [{"editorType":"sql","format":1,"queryType":"table","rawSql":"SELECT splitByChar('/', file_path)[4] AS top_folder, count() AS files, sum(size) AS bytes FROM symphony.scan_results WHERE run_id='$run_id' AND last_accessed < now()-INTERVAL 3 YEAR AND top_folder != '' GROUP BY top_folder ORDER BY bytes DESC LIMIT 25","refId":"A"}],
+      "title": "Cold Capacity — Top Folders (by last_accessed, candidates to archive)",
+      "type": "table"
+    },
+    {
+      "datasource": {"type":"grafana-clickhouse-datasource","uid":"clickhouse"},
+      "fieldConfig": {"defaults":{},"overrides":[{"matcher":{"id":"byName","options":"wasted_bytes"},"properties":[{"id":"unit","value":"bytes"}]}]},
+      "gridPos": {"h":10,"w":12,"x":12,"y":20},
+      "id": 5,
+      "targets": [{"editorType":"sql","format":1,"queryType":"table","rawSql":"SELECT filename, size, count() AS copies, (count()-1)*size AS wasted_bytes FROM symphony.scan_results WHERE run_id='$run_id' AND size > 1048576 GROUP BY filename, size HAVING copies > 1 ORDER BY wasted_bytes DESC LIMIT 50","refId":"A"}],
+      "title": "Name+Size Duplicate Clusters (wasted bytes)",
+      "type": "table"
+    },
+    {
+      "datasource": {"type":"grafana-clickhouse-datasource","uid":"clickhouse"},
+      "gridPos": {"h":8,"w":24,"x":0,"y":30},
+      "id": 6,
+      "targets": [{"editorType":"sql","format":1,"queryType":"table","rawSql":"SELECT toString(least(countSubstrings(acl,';'), 40)) AS ace_count, count() AS files FROM symphony.scan_results WHERE run_id='$run_id' GROUP BY ace_count ORDER BY toUInt32(ace_count)","refId":"A"}],
+      "title": "ACL Complexity — Semicolons per ACL (proxy for ACE count)",
+      "type": "barchart"
+    },
+    {
+      "datasource": {"type":"grafana-clickhouse-datasource","uid":"clickhouse"},
+      "description": "Percent of files per department not accessed within the last 1y / 3y / 5y. Based on last_accessed. Color gradient: green (low dormancy) → orange → red (high dormancy). Dept tail with <1000 files excluded.",
+      "fieldConfig": {
+        "defaults": {"min":0,"max":100},
+        "overrides": [
+          {"matcher":{"id":"byName","options":"dept"},"properties":[{"id":"displayName","value":"Dept"}]},
+          {"matcher":{"id":"byName","options":"pct_aging_1y"},"properties":[{"id":"displayName","value":"1y+"},{"id":"unit","value":"percent"},{"id":"custom.cellOptions","value":{"type":"color-background"}},{"id":"thresholds","value":{"mode":"absolute","steps":[{"color":"green","value":null},{"color":"orange","value":50},{"color":"red","value":80}]}}]},
+          {"matcher":{"id":"byName","options":"pct_dormant_3y"},"properties":[{"id":"displayName","value":"3y+"},{"id":"unit","value":"percent"},{"id":"custom.cellOptions","value":{"type":"color-background"}},{"id":"thresholds","value":{"mode":"absolute","steps":[{"color":"green","value":null},{"color":"orange","value":50},{"color":"red","value":80}]}}]},
+          {"matcher":{"id":"byName","options":"pct_ancient_5y"},"properties":[{"id":"displayName","value":"5y+"},{"id":"unit","value":"percent"},{"id":"custom.cellOptions","value":{"type":"color-background"}},{"id":"thresholds","value":{"mode":"absolute","steps":[{"color":"green","value":null},{"color":"orange","value":30},{"color":"red","value":60}]}}]},
+          {"matcher":{"id":"byName","options":"files"},"properties":[{"id":"displayName","value":"Files"},{"id":"unit","value":"short"}]}
+        ]
+      },
+      "gridPos": {"h":10,"w":24,"x":0,"y":38},
+      "id": 7,
+      "targets": [{"editorType":"sql","format":1,"queryType":"table","rawSql":"SELECT splitByChar('/', file_path)[4] AS dept, round(100.0 * countIf(last_accessed < now() - INTERVAL 1 YEAR) / count(), 1) AS pct_aging_1y, round(100.0 * countIf(last_accessed < now() - INTERVAL 3 YEAR) / count(), 1) AS pct_dormant_3y, round(100.0 * countIf(last_accessed < now() - INTERVAL 5 YEAR) / count(), 1) AS pct_ancient_5y, count() AS files FROM symphony.scan_results WHERE run_id='$run_id' AND dept != '' GROUP BY dept HAVING files > 1000 ORDER BY pct_dormant_3y DESC LIMIT 16","refId":"A"}],
+      "title": "Dormancy by Department (by last_accessed)",
+      "type": "table"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["symphony","architect"],
+  "templating": {"list":[{"datasource":{"type":"grafana-clickhouse-datasource","uid":"clickhouse"},"name":"run_id","query":"SELECT run_id FROM symphony.scan_results GROUP BY run_id ORDER BY max(run_start_time) DESC","refresh":1,"type":"query"}]},
+  "time": {"from":"now-7d","to":"now"},
+  "timezone": "browser",
+  "title": "Symphony — Storage Architect",
+  "uid": "sym-arch",
+  "version": 1
+}
