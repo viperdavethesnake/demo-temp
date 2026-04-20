@@ -41,7 +41,7 @@
       "fieldConfig": {"defaults":{"thresholds":{"mode":"absolute","steps":[{"color":"green","value":null},{"color":"orange","value":1},{"color":"red","value":5}]},"unit":"percent"}},
       "gridPos": {"h":4,"w":4,"x":16,"y":0},
       "id": 5,
-      "targets": [{"editorType":"sql","format":1,"queryType":"table","rawSql":"SELECT 100.0 * countIf(owner_name LIKE 'S-1-%' OR owner_name='' OR positionCaseInsensitive(owner_name,'unresolv')>0) / count() AS pct FROM symphony.scan_results WHERE run_id='$run_id'","refId":"A"}],
+      "targets": [{"editorType":"sql","format":1,"queryType":"table","rawSql":"SELECT 100.0 * countIf(owner_name LIKE 'S-1-%' OR owner_name='') / count() AS pct FROM symphony.scan_results WHERE run_id='$run_id'","refId":"A"}],
       "title": "% Files Orphaned Owner",
       "type": "stat"
     },
