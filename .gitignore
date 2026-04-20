@@ -3,3 +3,7 @@
 Thumbs.db
 desktop.ini
 *.swp
+
+# physical-size walker runtime artifacts
+physical-size/walker-errors.log
+physical-size/failed-batches/
