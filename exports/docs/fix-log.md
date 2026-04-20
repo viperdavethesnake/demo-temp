@@ -15,54 +15,74 @@ was to confirm which claimed fixes were actually in the JSON vs. still open.
 
 Scan: full — 9,964,693 files / 77.87 TiB / run_id `c915d505-3f5b-4bae-963b-c521b7fd63e3-1776679196233`.
 
-(Full Phase 0 tables omitted here for brevity — see earlier commits for the detailed per-panel grid. This version keeps only the running apply log from this point forward.)
+(Full Phase 0 tables omitted here for brevity — see earlier commits for the detailed per-panel grid.)
 
 ---
 
 ## Phase 1 sym-exec — shipped
 
-- apply #1 (`fc65bbeb`): B tile, pie options, Oldest Modified fieldConfig. Pie + B green; Oldest Modified still broken (DateTime64 dropped by stat panel reducer).
-- apply #2 (`c232f6d`): rawSql cast `toUnixTimestamp64Milli(min(modified))`. "10 years ago" ✅.
-- apply #3 (`d7a8e1a`): year histogram v1. X-axis showed "2.02 K" (unit-leak).
+- apply #1 (`fc65bbeb`): B tile, pie options, Oldest Modified fieldConfig. Pie + B green; Oldest Modified still broken.
+- apply #2 (`c232f6d`): `toUnixTimestamp64Milli(min(modified))` cast. "10 years ago" ✅.
+- apply #3 (`d7a8e1a`): year histogram v1. X-axis unit leak.
 - apply #4 (`e7d104d`, render `d09a964`): per-field unit overrides + `xField` pin. Histogram ✅.
-- apply #5 (`406bd72` + `8b395b9`): treemap plugin install + Capacity by Department panel. Plugin loads; size/color imperfect.
-- apply #6 (`61c4ce7`): color palette + height bump + colorByField. Visual polish imperfect; **accepting as-is and moving on** — story reads, data correct, further iteration not worth the tokens.
+- apply #5 (`406bd72` + `8b395b9`): treemap plugin + Capacity by Department.
+- apply #6 (`61c4ce7`): treemap color/height polish. Visual imperfect, **accepted as-is** — data correct, story reads.
 
-sym-exec Phase 1 complete. Five new / fixed panels: B tile, Oldest Modified, Age Band pie, year histogram, dept treemap.
+sym-exec Phase 1 complete.
 
 ---
 
-## 2026-04-20 — Phase 1 sym-ops (this commit)
+## 2026-04-20 — Phase 1 sym-ops (commit `8a48db7`)
 
-Four changes to sym-ops + a cross-dashboard correctness fix.
+### Shipped
 
-### Panel changes
+- Panel 3: `Everyone` count → `Widens Access (W)` count. 404,714 files, red. ✅
+- Panel 8: Top 20 Owners barchart shrunk `w=24 → w=12`.
+- Panel 9 (new): Service Account Footprint. 10 rows led by svc_antivirus 1.31 TiB. ✅ (10th row partially scrolled out; non-blocking, revisit if persona feedback warrants).
+- Panels 2 + 6: orphan predicate `'unresolv'` clause dropped.
+- Cross-dashboard: same `'unresolv'` cleanup on sym-exec #5 and sym-cfo #4. No number movement (branch wasn't firing on this data). ✅
 
-| Panel # | Before | After | Reason |
-|---|---|---|---|
-| 2 | Orphan-SID count with `'unresolv'` clause | Same query, `'unresolv'` clause dropped | Fragile substring on Symphony wording; `S-1-%` OR empty already catches the orphan population (confirmed 10% matches overview.csv). Backlog #5. |
-| 3 | `'Everyone' ACL Files` count (reads 0, stale sentinel) | `Widens Access (W)` count | Demo-critical; `acl` literal 'Everyone' is zero on this dataset, W flag is the real signal. Expected ~404,566 files (4.06% × 9.96M). |
-| 6 | Orphan worklist with `'unresolv'` | Same query, `'unresolv'` clause dropped | Same reason as #2. |
-| 7 | `'Everyone' / Open Exposure — Top Paths` (empty on full scan) | `ACL Pattern Classifier` | Demo-critical 0e. `multiIf` buckets on raw `acl`: ProperAGDLP (`DL_Share_`) / LazyGG (`DEMO\GG_`) / Everyone / Deny / OrphanSid-ACE / Other. First-match wins, so a file with both DL_Share_ AND GG_ is classified Proper. |
-| 8 | Top 20 Owners barchart, `w=24` full-width | Same query, `w=12` | Shrunk to make room for new svc-accounts table beside it. |
-| 9 (new) | — | `Service Account Footprint` table | Demo-critical 0f. `owner_name LIKE 'DEMO\svc_%'`. Expected 10 rows, svc_antivirus leading at 1.31 TiB. |
+### ACL Pattern Classifier (panel 7) — broken, then dropped (`8a48db7` + this commit)
 
-### Cross-dashboard `'unresolv'` cleanup (same commit)
+First render returned only two rows: OrphanSid-ACE at 99.97% and Other at 0.03%. All other pattern rows (ProperAGDLP, LazyGG, Everyone, Deny) empty.
 
-- sym-exec panel 5 (`% Files Orphaned Owner`): same predicate tightening.
-- sym-cfo panel 4 (`Capacity Owned by Orphan SIDs`): same predicate tightening.
+**Root cause**: the `acl` column stores **raw SDDL**, not resolved names. Symphony's scan policy didn't resolve ACEs to names for this scan, so domain-local groups (`DL_Share_Finance_RW`), global groups (`DEMO\GG_Finance`), and built-ins are serialized as raw SIDs (`S-1-5-21-…`) or 2-letter SDDL codes (`BA`, `BU`, `SY`, `DU`, `DA`, `WD` for Everyone, `D;` for Deny in ACE-type position). The substrings `DL_Share_` / `DEMO\GG_` / `Everyone` / `DENY` literally don't appear in the data.
 
-No visible number change expected — the `'unresolv'` branch wasn't firing on this data, so 10% / 7.77 TiB stay the same. Cleanup is for correctness / robustness.
+Diagnostic counts (Claude Code):
+```
+countIf(acl LIKE '%DL_Share_%')  = 0
+countIf(acl LIKE '%DEMO\\GG_%')  = 0
+countIf(acl LIKE '%Everyone%')   = 0
+countIf(acl LIKE '%DENY%')       = 0
+countIf(acl LIKE '%S-1-5-21%')   = 9,961,769
+```
 
-### Layout after this commit (sym-ops)
+Sample acl value from a row:
+```
+win:O:S-1-5-21-…-6509G:DUD:AI(A;ID;FA;;;S-1-5-21-…-6572)(A;ID;FA;;;BA)(A;ID;FA;;;SY)(A;ID;0x1200a9;;;BU)
+```
+
+### Decision
+
+Dropped panel 7 entirely. Option considered and rejected: porting the classifier to SDDL codes (detect `WD` for Everyone, `D;` in ACE-type position for Deny, RID-range heuristics for GG_ vs DL_). Brittle without an AD SID ↔ name map, and the W/B tiles on the top row already surface the two hygiene flags that matter for VAR narrative.
+
+Expanded panel 6 (Orphan SID Worklist) from `w=12` to `w=24` to fill the space. Cleaner layout, more columns readable.
+
+### Parked for later (new backlog item)
+
+**ACL name resolution on future scans.** If Symphony's Scan Policy has a "resolve ACEs to names" option in AdminCenter, turning it on repopulates `acl` with `DEMO\DL_Share_Finance_RW` style strings, and a string-match classifier becomes viable. Otherwise the acl_analysis flag string (already surfaced via W/B tiles) is the authoritative signal. Not actioning now; note for the next scan-policy review.
+
+### sym-ops final layout
 
 - y=0, h=3: 5 stat tiles (Files / Orphan-SID / Widens-W / Broken-B / Mod-24h).
-- y=3, h=10: Orphan Worklist (w=12) + ACL Pattern Classifier (w=12).
+- y=3, h=10: Orphan SID Worklist, full width.
 - y=13, h=8: Service Account Footprint (w=12) + Top 20 Owners (w=12).
+
+sym-ops Phase 1 complete.
 
 ---
 
 ## Phase 1 remaining
 
-- sym-cfo: chargeback-parity tile.
+- sym-cfo: chargeback-parity tile (Symphony page-7 donut).
 - sym-arch: dormancy-by-dept heatmap (0c), Extension × Age Matrix column aliases, cold-basis alignment (`modified` vs `last_accessed`).

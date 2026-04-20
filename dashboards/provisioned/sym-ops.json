@@ -46,19 +46,10 @@
     {
       "datasource": {"type":"grafana-clickhouse-datasource","uid":"clickhouse"},
       "fieldConfig": {"defaults":{},"overrides":[{"matcher":{"id":"byName","options":"bytes"},"properties":[{"id":"unit","value":"bytes"}]}]},
-      "gridPos": {"h":10,"w":12,"x":0,"y":3},
+      "gridPos": {"h":10,"w":24,"x":0,"y":3},
       "id": 6,
       "targets": [{"editorType":"sql","format":1,"queryType":"table","rawSql":"SELECT owner_sid, any(owner_name) AS sample_name, count() AS files, sum(size) AS bytes, min(modified) AS oldest, max(modified) AS newest FROM symphony.scan_results WHERE run_id='$run_id' AND (owner_name LIKE 'S-1-%' OR owner_name='') GROUP BY owner_sid ORDER BY bytes DESC LIMIT 50","refId":"A"}],
       "title": "Orphan SID Worklist — Top by Capacity",
-      "type": "table"
-    },
-    {
-      "datasource": {"type":"grafana-clickhouse-datasource","uid":"clickhouse"},
-      "fieldConfig": {"defaults":{},"overrides":[{"matcher":{"id":"byName","options":"bytes"},"properties":[{"id":"unit","value":"bytes"}]}]},
-      "gridPos": {"h":10,"w":12,"x":12,"y":3},
-      "id": 7,
-      "targets": [{"editorType":"sql","format":1,"queryType":"table","rawSql":"SELECT multiIf(positionCaseInsensitive(acl,'DL_Share_')>0,'ProperAGDLP',positionCaseInsensitive(acl,'DEMO\\\\GG_')>0,'LazyGG (direct GG on ACL)',positionCaseInsensitive(acl,'Everyone')>0,'Everyone',positionCaseInsensitive(acl,'DENY')>0,'Deny',positionCaseInsensitive(acl,'S-1-5-21')>0,'OrphanSid-ACE','Other') AS pattern, count() AS files, sum(size) AS bytes FROM symphony.scan_results WHERE run_id='$run_id' GROUP BY pattern ORDER BY files DESC","refId":"A"}],
-      "title": "ACL Pattern Classifier",
       "type": "table"
     },
     {
