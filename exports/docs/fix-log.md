@@ -109,7 +109,7 @@ Ordered for the next pass:
 4. Add creation-year histogram (0b) with a customer-generic annotation on 2019.
 5. Add dept-bytes viz (0d). Treemap vs stacked bar TBD.
 
-Items 1–3 are this pass; 4–5 next. `migrated` tile dropped to Phase 2.
+`migrated` tile dropped to Phase 2. Items shipped iteratively below.
 
 ---
 
@@ -155,44 +155,53 @@ One-line SQL change on sym-exec panel id=4: `SELECT toUnixTimestamp64Milli(min(m
 
 ---
 
-## 2026-04-20 — Phase 1 apply #3 (this commit): item 0b
+## 2026-04-20 — Phase 1 apply #3 (commit `d7a8e1a`): item 0b first attempt
 
-### Creation Year Distribution panel (id=10)
+Added Creation Year Distribution barchart (id=10) below the pie+owners row.
 
-Added below the pie+barchart row on sym-exec. Panel spec:
+Render report from Claude Code:
 
-- Type: `barchart`
-- gridPos: `{x:0, y:16, w:24, h:8}` — full width, below the pie/owners row.
-- SQL: `SELECT toString(toYear(created)) AS year, count() AS files FROM symphony.scan_results WHERE run_id='$run_id' AND toYear(created) BETWEEN 2015 AND 2027 GROUP BY year ORDER BY year`
-- `toString(...)` forces categorical x-axis (prevents Grafana from drawing 2016.5 etc.).
-- Unit: `short` (file counts).
-- Description text (customer-generic): *"2019 shows a notable ~9.6% bulge vs. 3–4% in surrounding years. Investigate origin (acquisition? migration? policy change?)."* Shows as hover-? icon next to panel title. Demo-specific "Deadbeat Corp" framing intentionally not used — this wording is VAR-deliverable safe.
+| Check | Expected | Actual | Status |
+|---|---|---|---|
+| 11 bars (2016–2026) | yes | 11 bars | ✅ |
+| 2019 bar visibly taller | 959K vs 354K–429K neighbours | 959K vs 418K/354K/394K/429K, clearly double-ish | ✅ |
+| X-axis labels categorical | "2016".."2026" | "2.02 K" repeated, last two "2.03 K" | ❌ broken |
+| Info icon next to title | yes | ⓘ visible | ✅ |
+| No regressions top row / pie | all unchanged | all unchanged | ✅ |
 
-### Expected values (from year-distribution.csv)
+### Root cause on x-axis labels
 
-| year | files | % |
-|---|---:|---:|
-| 2016 | 417,816 | 4.19% |
-| 2017 | 354,276 | 3.56% |
-| 2018 | 393,860 | 3.95% |
-| **2019** | **958,842** | **9.62%** |
-| 2020 | 428,981 | 4.31% |
-| 2021 | 1,717,868 | 17.24% |
-| 2022 | 2,457,713 | 24.66% |
-| 2023 | 1,449,935 | 14.55% |
-| 2024 | 768,442 | 7.71% |
-| 2025 | 669,857 | 6.72% |
-| 2026 | 347,103 | 3.48% |
+"2.02 K" / "2.03 K" is the `short` unit formatter applied to year values: 2016/1000 = 2.016 → "2.02 K". So Grafana was treating the year column as numeric AND applying `fieldConfig.defaults.unit = "short"` to the x-axis.
 
-2019 is the bulge relative to its neighbours. The 2021–2023 peak is a generator artifact (Dormant / LegacyArchive classes pin creation to Now-3y..5y) — documented but not a "storyline" per the generator's demo-narrative.
+Two contributing factors:
+- The ClickHouse plugin (or Grafana's barchart auto-type-detection) coerced `toString(toYear(...))` back to numeric because the values looked numeric. Compare to the Top-10-Owners barchart which works: owner_name has backslashes, impossible to coerce, so the "bytes" unit stayed on the bytes field only.
+- `defaults.unit` leaked onto the x-axis even though it was intended for file counts.
 
-### Item 0d (dept-bytes viz) paused
+### Fix #4 queued (this commit)
 
-User decision: install the `marcusolsson-treemap-panel` Grafana plugin first, so 0d ships as a treemap right away rather than as a bar chart that later gets upgraded. See Claude Code prompt in chat.
+Three changes to panel id=10:
+
+1. **Drop `fieldConfig.defaults.unit`**. Replace with per-field `overrides`: `year` → unit `"none"` + axisLabel "Year"; `files` → unit `"short"` + axisLabel "Files". Scopes the formatter to only the fields it's meant for.
+2. **Add `options.xField = "year"`**. Explicitly pins year as the x-axis dimension — no auto-detection ambiguity between year and files.
+3. **Add `options.legend.showLegend = false`** and `options.showValue = "auto"`. Single-series barchart; legend is noise, value labels on bars help readability.
+
+Also simplified SQL: dropped the `toString(toYear(...))` cast since it didn't help and was being undone. Year now numeric in SQL; unit override on the Grafana side does the work.
+
+---
+
+## 2026-04-20 — Phase 1 apply #4 (this commit)
+
+Fix-up for x-axis rendering on the year histogram. Expected render:
+
+- X-axis: categorical labels "2016" … "2026".
+- Y-axis: file counts in short unit ("1.7M", "2.5M", etc.).
+- 2019 bar clearly taller than 2016–2018, 2020.
+- No legend (single series).
+- Axis labels "Year" (bottom) and "Files" (left).
 
 ---
 
 ## Phase 1 remaining
 
-- 0d dept-bytes treemap on sym-exec — pending plugin install on sym02.
+- 0d dept-bytes treemap on sym-exec — paused pending `marcusolsson-treemap-panel` plugin install on sym02.
 - (Then Phase 1 for sym-ops, sym-cfo, sym-arch per the original persona order.)

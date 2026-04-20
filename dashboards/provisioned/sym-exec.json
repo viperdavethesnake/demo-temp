@@ -85,10 +85,22 @@
     {
       "datasource": {"type":"grafana-clickhouse-datasource","uid":"clickhouse"},
       "description": "2019 shows a notable ~9.6% bulge vs. 3–4% in surrounding years. Investigate origin (acquisition? migration? policy change?).",
-      "fieldConfig": {"defaults":{"unit":"short"}},
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {"matcher":{"id":"byName","options":"year"},"properties":[{"id":"unit","value":"none"},{"id":"custom.axisLabel","value":"Year"}]},
+          {"matcher":{"id":"byName","options":"files"},"properties":[{"id":"unit","value":"short"},{"id":"custom.axisLabel","value":"Files"}]}
+        ]
+      },
       "gridPos": {"h":8,"w":24,"x":0,"y":16},
       "id": 10,
-      "targets": [{"editorType":"sql","format":1,"queryType":"table","rawSql":"SELECT toString(toYear(created)) AS year, count() AS files FROM symphony.scan_results WHERE run_id='$run_id' AND toYear(created) BETWEEN 2015 AND 2027 GROUP BY year ORDER BY year","refId":"A"}],
+      "options": {
+        "xField": "year",
+        "orientation": "vertical",
+        "showValue": "auto",
+        "legend": {"showLegend": false}
+      },
+      "targets": [{"editorType":"sql","format":1,"queryType":"table","rawSql":"SELECT toYear(created) AS year, count() AS files FROM symphony.scan_results WHERE run_id='$run_id' AND toYear(created) BETWEEN 2015 AND 2027 GROUP BY year ORDER BY year","refId":"A"}],
       "title": "Creation Year Distribution",
       "type": "barchart"
     }
