@@ -131,47 +131,61 @@ SQL change on panel id=4: `SELECT toUnixTimestamp64Milli(min(modified)) AS oldes
 
 ## 2026-04-20 — Phase 1 apply #3 (commit `d7a8e1a`): item 0b first attempt
 
-Added Creation Year Distribution barchart. Render: 11 bars, counts match year-distribution.csv to the thousand, 2019 bulge clearly visible. **But**: x-axis labels read "2.02 K" / "2.03 K" — the `short` unit leaked to x-axis because ClickHouse plugin / Grafana barchart coerced `toString(toYear(...))` back to numeric (values looked numeric). Compare to Top-10-Owners which works because `owner_name` has backslashes, impossible to coerce.
+Added Creation Year Distribution barchart. Render: 11 bars, counts match year-distribution.csv, 2019 bulge visible. X-axis labels broken: "2.02 K" repeated — `short` unit leaked to x-axis because ClickHouse plugin coerced `toString(toYear(...))` back to numeric.
 
 ---
 
 ## 2026-04-20 — Phase 1 apply #4 (commit `e7d104d`): 0b x-axis fix
 
-Dropped `fieldConfig.defaults.unit`; added per-field `overrides` (`year` → unit `"none"` + axisLabel "Year"; `files` → unit `"short"` + axisLabel "Files"). Set `options.xField = "year"` to pin the dimension. Dropped the unhelpful toString() cast. `legend.showLegend = false` (single series).
-
-Render: x-axis labels "2016".."2026" clean, y-axis short-formatted, 2019 bar clearly taller, axis labels "Year" / "Files", value labels on all 11 bars. Item 0b green. No regressions. Commit pushed as `d09a964`.
+Per-field `overrides` (`year` → unit `none`; `files` → unit `short`), `options.xField = "year"`, dropped the toString cast. Render: x-axis labels "2016".."2026" clean, 2019 bar clearly taller, axis labels "Year" / "Files". Item 0b green. Commit landed as `d09a964`.
 
 ---
 
-## 2026-04-20 — Phase 1 apply #5 (commit `406bd72` + this commit): item 0d
+## 2026-04-20 — Phase 1 apply #5 (commit `406bd72` + `8b395b9`): item 0d first attempt
 
-### Treemap plugin install (sym02-side, commit `406bd72`)
+### Treemap plugin install (commit `406bd72`)
 
-`docker-compose.yaml` updated: `GF_INSTALL_PLUGINS=grafana-clickhouse-datasource,marcusolsson-treemap-panel`. `docker compose up -d grafana` restarted container cleanly. Plugin install log: `marcusolsson-treemap-panel v2.1.1` installed and registered in ~700ms, no errors. `/api/plugins?core=0` confirms enabled.
+`GF_INSTALL_PLUGINS=grafana-clickhouse-datasource,marcusolsson-treemap-panel`. Container restart clean, plugin v2.1.1 installed in ~700ms, `/api/plugins?core=0` confirms enabled.
 
-### Capacity by Department panel (this commit, panel id=11)
+### Capacity by Department panel (commit `8b395b9`)
 
-- Type: `marcusolsson-treemap-panel`.
-- gridPos: `{x:0, y:24, w:24, h:10}` — full-width, below the year histogram.
-- SQL: `SELECT splitByChar('/', file_path)[4] AS dept, sum(size) AS bytes FROM symphony.scan_results WHERE run_id='$run_id' AND dept != '' GROUP BY dept ORDER BY bytes DESC LIMIT 16`.
-- `LIMIT 16` keeps the 16 real departments; the long-tail LEGACY_*/OLD_*/__OLD__/etc. rows are omitted (each < 0.3% of total, would render as slivers).
-- Options: minimal — `labelFields: ["dept"]`, `sizeField: "bytes"`. Plugin defaults handle color (auto per-label distinct), layout (squarify), tooltip, borders.
-- Field config: `bytes` → unit `bytes` (so tooltips render as TiB/GiB). `defaults` empty to avoid cross-field unit leakage like the year-histogram saga.
-- Description: "Capacity by top-level folder under /S/Shared/. Top 16 departments shown; long-tail (<0.3% of total each) omitted."
+Added treemap panel id=11, full-width below year histogram, `LIMIT 16` real depts.
 
-Expected render: IT (14.81 TiB) is the largest rectangle (~19% of canvas area). Training 7.16 / Marketing 7.10 / Finance 6.66 / Support 6.17 next tier. Down through Facilities 1.44 TiB. 16 boxes fill the 24×10 canvas.
+### Render report
+
+| Check | Expected | Actual | Status |
+|---|---|---|---|
+| Treemap renders | rectangular tiling | yes, plugin loads | ✅ |
+| 16 rectangles | 16 | 7 visible (IT/Training/Finance/Sales/Legal/Procurement/Ops + HR fragment) | ❌ |
+| IT ~19% of canvas, 2× next tier | yes | IT ~equal to Training/Finance/Sales — no size hierarchy | ❌ |
+| Distinct palette per tile | yes | all visible tiles same salmon/red | ❌ |
+| No regressions | all green | all green | ✅ |
+
+### Diagnosis
+
+Three separate issues:
+
+1. **Color**: No explicit `color.mode`; plugin defaulted to something threshold-like that mapped all bytes values (10¹²–10¹³ range) to the top threshold → same red.
+2. **Size-not-varying**: The plugin is not honoring `sizeField: "bytes"` — IT (14.81 TiB) renders roughly the same size as Training (7.16 TiB). If the plugin ignored the option or the option name is wrong, it likely fell back to equal-sized tiles or row-count, which explains the non-proportional layout.
+3. **Missing tiles**: Almost-certainly a consequence of #2 — with broken size calculation, the layout algorithm places tiles arbitrarily and some either overlap or fall outside the visible canvas.
 
 ---
 
-## Phase 1 sym-exec status after this commit
+## 2026-04-20 — Phase 1 apply #6 (this commit): 0d fix-up attempt
 
-- Items 1–5 shipped. One final render to verify.
-- `migrated` tile (originally item 6) parked to Phase 2 — no signal on synthetic data.
+Three fixes in parallel:
+
+1. **Explicit color**: `fieldConfig.defaults.color.mode = "palette-classic-by-name"`. This assigns a distinct color per unique `dept` value rather than one color per series (single-series with palette-classic would give all tiles the same color).
+2. **Bump height**: `h=10 → h=14`. Per Claude Code's render observation that the canvas was too short for 16 items to lay out.
+3. **Add `colorByField: "dept"`** to options, on top of existing `labelFields: ["dept"]` + `sizeField: "bytes"`. Explicitly tells the plugin which field drives color.
+
+If this still fails on size-scaling (IT not ~2× Training), the plugin schema is different from what I'm guessing. Fallback plan: ask Claude Code to configure the panel interactively via Grafana's UI, export the working JSON model, and I'll codify the exact option shape for the plugin.
 
 ---
 
-## Phase 1 remaining (post-sym-exec)
+## Phase 1 remaining
 
+- sym-exec apply #6 verification (this commit).
 - sym-ops: widens-access count tile, ACL-pattern classifier (0e), service-account panel (0f), orphan-predicate tightening (#5), stale Everyone sentinels.
 - sym-cfo: chargeback-parity tile, orphan-predicate tightening.
 - sym-arch: dormancy-by-dept heatmap (0c), Extension × Age Matrix column aliases, cold-basis alignment (`modified` vs `last_accessed`).
