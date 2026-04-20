@@ -1,0 +1,5 @@
+# OS / editor noise only. Everything else is intentionally committed.
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
