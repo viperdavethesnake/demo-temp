@@ -103,11 +103,11 @@ Three copies of each dashboard JSON existed previously (`/dashboards/`, `/dashbo
 
 Ordered for the next pass:
 
-1. Add `% Broken DACL Inheritance (B)` stat tile. SQL: `100.0 * countIf(positionCaseInsensitive(acl_analysis,'B')>0) / count()`. Expected: ~92.56%.
-2. Fix `Oldest Modified` fieldConfig. Add `unit: "dateTimeFromNow"` so DateTime64 renders as "10 years ago".
-3. Fix `Capacity by Age Band` pie: add `options.reduceOptions.values=true` (likely root cause of single-slice yellow disc), `options.legend`, `options.displayLabels`, and `fieldConfig.defaults.color.mode = "palette-classic"`.
-4. Add creation-year histogram (0b) with a customer-generic annotation on 2019.
-5. Add dept-bytes viz (0d). Treemap vs stacked bar TBD.
+1. Add `% Broken DACL Inheritance (B)` stat tile.
+2. Fix `Oldest Modified` fieldConfig.
+3. Fix `Capacity by Age Band` pie.
+4. Add creation-year histogram (0b) with customer-generic 2019 wording.
+5. Add dept-bytes viz (0d).
 
 `migrated` tile dropped to Phase 2. Items shipped iteratively below.
 
@@ -115,93 +115,63 @@ Ordered for the next pass:
 
 ## 2026-04-20 — Phase 1 apply #1 (commit `fc65bbeb`)
 
-Pushed items 1–3 to sym-exec. Render report from Claude Code:
+Pushed items 1–3. Render: B tile 92.6% red ✅; pie 4-slice donut with legend ✅; Oldest Modified still "No data" ❌ (stat panel reducer filters numeric fields; DateTime64 dropped before unit formatter applies).
 
-| Change | Expected | Actual | Status |
-|---|---|---|---|
-| B tile added | ~92.56%, red | 92.6%, red | ✅ shipped |
-| W tile (unchanged) | ~4.06% | 4.06% orange | ✅ |
-| Age Band pie config | 4 labelled slices + legend | Frozen 74% / Cold 19% / Warm 4% / Active 3%, donut, legend with values+% | ✅ shipped |
-| Oldest Modified fieldConfig | "N years ago" | "No data" (unchanged) | ❌ not fixed |
+Pie sanity: 57.4 + 14.9 + 3.12 + 2.52 = 77.94 TiB ≈ 77.87 TiB total. ✅
 
-### Oldest Modified root cause
-
-The ClickHouse plugin returns `min(modified)` as a typed time field. The stat panel's default reducer filters to numeric fields and drops the time column before any unit formatter applies — "No data" is the stat-panel fallback when zero numeric fields remain. `fieldConfig.defaults.unit = "dateTimeFromNow"` alone doesn't fix it because the field was already discarded.
-
-### Fix #2 queued (commit next)
-
-Change the rawSql on panel id=4 from `SELECT min(modified) AS oldest` to `SELECT toUnixTimestamp64Milli(min(modified)) AS oldest`. Int64 ms-since-epoch survives the numeric-field filter; `dateTimeFromNow` unit then formats it as "N years ago". Panel config unchanged beyond the unit. One-line SQL change.
-
-### Cross-dashboard consistency note
-
-Age Band pie on sym-exec reads Frozen (3y+) = 74% **by `modified`**. findings.md headline says 69.5% dormant **by `last_accessed`**. Both correct for their definition — write-cold is a larger population than read-cold here (files get read but not modified). This is Phase 0 issue #1. Flagging again so we don't quote the wrong number in a VAR report. Final alignment call still pending.
-
-### Sanity check on pie totals
-
-Pie legend values: 57.4 + 14.9 + 3.12 + 2.52 = 77.94 TiB. Matches overview.csv total of 77.87 TiB within rounding. ✅
+Cross-dashboard flag: pie reads Frozen 74% by `modified`; overview.csv says 69.5% dormant by `last_accessed`. Different definitions, real gap. Phase 0 issue #1 restated.
 
 ---
 
 ## 2026-04-20 — Phase 1 apply #2 (commit `c232f6d`)
 
-One-line SQL change on sym-exec panel id=4: `SELECT toUnixTimestamp64Milli(min(modified)) AS oldest`. Render report from Claude Code:
-
-| Change | Expected | Actual | Status |
-|---|---|---|---|
-| Oldest Modified | "N years ago" | "10 years ago" (red) | ✅ fixed |
-| B / W / pie | no regression | 92.6% B, 4.06% W, pie 4 slices unchanged | ✅ |
-
-"10 years ago" matches min modified of 2016-04-20 exactly against today's 2026-04-20. Phase 1 items 1–3 all green.
+SQL change on panel id=4: `SELECT toUnixTimestamp64Milli(min(modified)) AS oldest`. Int64 ms-epoch survives the numeric-field filter. Render: "10 years ago" red ✅, no regressions. Items 1–3 all green.
 
 ---
 
 ## 2026-04-20 — Phase 1 apply #3 (commit `d7a8e1a`): item 0b first attempt
 
-Added Creation Year Distribution barchart (id=10) below the pie+owners row.
-
-Render report from Claude Code:
-
-| Check | Expected | Actual | Status |
-|---|---|---|---|
-| 11 bars (2016–2026) | yes | 11 bars | ✅ |
-| 2019 bar visibly taller | 959K vs 354K–429K neighbours | 959K vs 418K/354K/394K/429K, clearly double-ish | ✅ |
-| X-axis labels categorical | "2016".."2026" | "2.02 K" repeated, last two "2.03 K" | ❌ broken |
-| Info icon next to title | yes | ⓘ visible | ✅ |
-| No regressions top row / pie | all unchanged | all unchanged | ✅ |
-
-### Root cause on x-axis labels
-
-"2.02 K" / "2.03 K" is the `short` unit formatter applied to year values: 2016/1000 = 2.016 → "2.02 K". So Grafana was treating the year column as numeric AND applying `fieldConfig.defaults.unit = "short"` to the x-axis.
-
-Two contributing factors:
-- The ClickHouse plugin (or Grafana's barchart auto-type-detection) coerced `toString(toYear(...))` back to numeric because the values looked numeric. Compare to the Top-10-Owners barchart which works: owner_name has backslashes, impossible to coerce, so the "bytes" unit stayed on the bytes field only.
-- `defaults.unit` leaked onto the x-axis even though it was intended for file counts.
-
-### Fix #4 queued (this commit)
-
-Three changes to panel id=10:
-
-1. **Drop `fieldConfig.defaults.unit`**. Replace with per-field `overrides`: `year` → unit `"none"` + axisLabel "Year"; `files` → unit `"short"` + axisLabel "Files". Scopes the formatter to only the fields it's meant for.
-2. **Add `options.xField = "year"`**. Explicitly pins year as the x-axis dimension — no auto-detection ambiguity between year and files.
-3. **Add `options.legend.showLegend = false`** and `options.showValue = "auto"`. Single-series barchart; legend is noise, value labels on bars help readability.
-
-Also simplified SQL: dropped the `toString(toYear(...))` cast since it didn't help and was being undone. Year now numeric in SQL; unit override on the Grafana side does the work.
+Added Creation Year Distribution barchart. Render: 11 bars, counts match year-distribution.csv to the thousand, 2019 bulge clearly visible. **But**: x-axis labels read "2.02 K" / "2.03 K" — the `short` unit leaked to x-axis because ClickHouse plugin / Grafana barchart coerced `toString(toYear(...))` back to numeric (values looked numeric). Compare to Top-10-Owners which works because `owner_name` has backslashes, impossible to coerce.
 
 ---
 
-## 2026-04-20 — Phase 1 apply #4 (this commit)
+## 2026-04-20 — Phase 1 apply #4 (commit `e7d104d`): 0b x-axis fix
 
-Fix-up for x-axis rendering on the year histogram. Expected render:
+Dropped `fieldConfig.defaults.unit`; added per-field `overrides` (`year` → unit `"none"` + axisLabel "Year"; `files` → unit `"short"` + axisLabel "Files"). Set `options.xField = "year"` to pin the dimension. Dropped the unhelpful toString() cast. `legend.showLegend = false` (single series).
 
-- X-axis: categorical labels "2016" … "2026".
-- Y-axis: file counts in short unit ("1.7M", "2.5M", etc.).
-- 2019 bar clearly taller than 2016–2018, 2020.
-- No legend (single series).
-- Axis labels "Year" (bottom) and "Files" (left).
+Render: x-axis labels "2016".."2026" clean, y-axis short-formatted, 2019 bar clearly taller, axis labels "Year" / "Files", value labels on all 11 bars. Item 0b green. No regressions. Commit pushed as `d09a964`.
 
 ---
 
-## Phase 1 remaining
+## 2026-04-20 — Phase 1 apply #5 (commit `406bd72` + this commit): item 0d
 
-- 0d dept-bytes treemap on sym-exec — paused pending `marcusolsson-treemap-panel` plugin install on sym02.
-- (Then Phase 1 for sym-ops, sym-cfo, sym-arch per the original persona order.)
+### Treemap plugin install (sym02-side, commit `406bd72`)
+
+`docker-compose.yaml` updated: `GF_INSTALL_PLUGINS=grafana-clickhouse-datasource,marcusolsson-treemap-panel`. `docker compose up -d grafana` restarted container cleanly. Plugin install log: `marcusolsson-treemap-panel v2.1.1` installed and registered in ~700ms, no errors. `/api/plugins?core=0` confirms enabled.
+
+### Capacity by Department panel (this commit, panel id=11)
+
+- Type: `marcusolsson-treemap-panel`.
+- gridPos: `{x:0, y:24, w:24, h:10}` — full-width, below the year histogram.
+- SQL: `SELECT splitByChar('/', file_path)[4] AS dept, sum(size) AS bytes FROM symphony.scan_results WHERE run_id='$run_id' AND dept != '' GROUP BY dept ORDER BY bytes DESC LIMIT 16`.
+- `LIMIT 16` keeps the 16 real departments; the long-tail LEGACY_*/OLD_*/__OLD__/etc. rows are omitted (each < 0.3% of total, would render as slivers).
+- Options: minimal — `labelFields: ["dept"]`, `sizeField: "bytes"`. Plugin defaults handle color (auto per-label distinct), layout (squarify), tooltip, borders.
+- Field config: `bytes` → unit `bytes` (so tooltips render as TiB/GiB). `defaults` empty to avoid cross-field unit leakage like the year-histogram saga.
+- Description: "Capacity by top-level folder under /S/Shared/. Top 16 departments shown; long-tail (<0.3% of total each) omitted."
+
+Expected render: IT (14.81 TiB) is the largest rectangle (~19% of canvas area). Training 7.16 / Marketing 7.10 / Finance 6.66 / Support 6.17 next tier. Down through Facilities 1.44 TiB. 16 boxes fill the 24×10 canvas.
+
+---
+
+## Phase 1 sym-exec status after this commit
+
+- Items 1–5 shipped. One final render to verify.
+- `migrated` tile (originally item 6) parked to Phase 2 — no signal on synthetic data.
+
+---
+
+## Phase 1 remaining (post-sym-exec)
+
+- sym-ops: widens-access count tile, ACL-pattern classifier (0e), service-account panel (0f), orphan-predicate tightening (#5), stale Everyone sentinels.
+- sym-cfo: chargeback-parity tile, orphan-predicate tightening.
+- sym-arch: dormancy-by-dept heatmap (0c), Extension × Age Matrix column aliases, cold-basis alignment (`modified` vs `last_accessed`).

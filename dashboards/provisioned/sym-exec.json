@@ -103,6 +103,25 @@
       "targets": [{"editorType":"sql","format":1,"queryType":"table","rawSql":"SELECT toYear(created) AS year, count() AS files FROM symphony.scan_results WHERE run_id='$run_id' AND toYear(created) BETWEEN 2015 AND 2027 GROUP BY year ORDER BY year","refId":"A"}],
       "title": "Creation Year Distribution",
       "type": "barchart"
+    },
+    {
+      "datasource": {"type":"grafana-clickhouse-datasource","uid":"clickhouse"},
+      "description": "Capacity by top-level folder under /S/Shared/. Top 16 departments shown; long-tail (<0.3% of total each) omitted.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {"matcher":{"id":"byName","options":"bytes"},"properties":[{"id":"unit","value":"bytes"}]}
+        ]
+      },
+      "gridPos": {"h":10,"w":24,"x":0,"y":24},
+      "id": 11,
+      "options": {
+        "labelFields": ["dept"],
+        "sizeField": "bytes"
+      },
+      "targets": [{"editorType":"sql","format":1,"queryType":"table","rawSql":"SELECT splitByChar('/', file_path)[4] AS dept, sum(size) AS bytes FROM symphony.scan_results WHERE run_id='$run_id' AND dept != '' GROUP BY dept ORDER BY bytes DESC LIMIT 16","refId":"A"}],
+      "title": "Capacity by Department",
+      "type": "marcusolsson-treemap-panel"
     }
   ],
   "schemaVersion": 39,
