@@ -17,8 +17,7 @@ CREATE TABLE IF NOT EXISTS symphony.file_physical (
     run_id     String,
     file_uri   String,
     allocated  UInt64,
-    status     LowCardinality(String),  -- OK | MISSING | ERROR
-    probed_at  DateTime64(3) DEFAULT now64(3)
+    probed_at  DateTime DEFAULT now()
 )
 ENGINE = ReplacingMergeTree(probed_at)
 PARTITION BY run_id
@@ -27,19 +26,22 @@ ORDER BY (run_id, file_uri);
 
 Choices, and why:
 
-- **`ReplacingMergeTree(probed_at)`** — lets us re-walk a `run_id` without having to clear the table first. On merge, the latest `probed_at` wins per `(run_id, file_uri)`. At read time, pairs with `FINAL` or `argMax` to get authoritative rows (see §5).
+- **`ReplacingMergeTree(probed_at)`** — lets us re-walk a `run_id` without clearing first. On merge, the latest `probed_at` wins per `(run_id, file_uri)`. Reads pair with `argMax` to be deterministic pre-merge (see §5).
 - **`PARTITION BY run_id`** — makes "drop an old run" a one-line `ALTER TABLE DROP PARTITION`. With 9.96 M rows per run, each partition is still a healthy size for MergeTree.
-- **`ORDER BY (run_id, file_uri)`** — mirrors `scan_results`' order so `(run_id, file_uri)` joins are efficient on both sides. Sparse primary index will skip straight to the right granule.
-- **`LowCardinality(String)`** for `status` — three values, reduces storage and speeds up filters.
-- **No codec tuning** — default LZ4 is fine at this size. Revisit if we ever hold many runs.
+- **`ORDER BY (run_id, file_uri)`** — mirrors `scan_results`' order so `(run_id, file_uri)` joins are efficient on both sides.
+- **No `status` column.** Rows exist only for successful probes. Files the walker couldn't reach (deleted, permission error, Win32 failure) are identified by set-difference against `scan_results` at validation time — simpler schema, same information.
+- **`DateTime` (second resolution)** for `probed_at` — we don't need sub-second. `now()` is enough.
+- **No codec tuning** — default LZ4 is fine at this size.
 
 ## 3. Load pipeline
 
-Three stages, all stream-oriented so we never materialise 10 M rows in memory:
+Two halves: (1) pull the file list once, (2) walker buffers batches of rows and POSTs them to ClickHouse as it goes.
 
 ```
-[ ClickHouse SELECT ]  --TSV-->  [ probe-physical-size.ps1 ]  --TSV-->  [ ClickHouse INSERT ]
+[ ClickHouse SELECT ] --TSV--> [ probe-physical-size.ps1 ] --batched HTTP POST--> [ ClickHouse ]
 ```
+
+Batched POSTs instead of one long stream give us crash resilience — if the walker dies at row 6,000,000, the first ~6 M rows are already durably in the table and a resumed run only needs to cover the gap.
 
 ### 3.1 Selecting the input
 
@@ -51,39 +53,40 @@ WHERE run_id = '{RUN_ID}'
 FORMAT TabSeparated
 ```
 
-- **`filename != ''`** is essential: 2,692 rows in `scan_results` are directory entries (trailing `/`, empty `filename`, `size = 0`). `GetCompressedFileSizeW` on a directory is undefined behaviour for our purposes, and the allocation number doesn't mean anything comparable. We exclude them.
-- After filter: 9,962,001 rows to probe.
+- **`filename != ''`** is essential: 2,692 rows in `scan_results` are directory entries (trailing `/`, empty `filename`, `size = 0`). `GetCompressedFileSizeW` on a directory doesn't give a meaningful comparable number.
+- After filter: **9,962,001** rows to probe.
 
 ### 3.2 The walker (PowerShell 7, detailed in `DESIGN.md` §3.2)
 
-Reads TSV on stdin, emits `run_id \t file_uri \t allocated \t status` on stdout. One-shot per file via P/Invoke — no intermediate files.
+- Reads `run_id \t file_uri` on stdin.
+- For each: convert URI → Windows path, call `GetCompressedFileSizeW` via P/Invoke.
+- On success, buffer `run_id \t file_uri \t allocated` in memory. On failure (file missing, Win32 error), log the path + error code to a sidecar log file and skip — no row emitted.
+- When the buffer reaches **10,000–50,000 rows** (target 25,000), flush: POST as TSV body to
 
-### 3.3 Inserting into ClickHouse
+  ```
+  http://localhost:8123/?query=INSERT+INTO+symphony.file_physical+FORMAT+TabSeparated
+  ```
 
-```bash
-clickhouse-client \
-  --user symphony --password symphony \
-  --query "INSERT INTO symphony.file_physical (run_id, file_uri, allocated, status) FORMAT TabSeparated"
-```
+  with HTTP Basic auth `symphony:symphony`, `Content-Type: text/tab-separated-values`.
+- On HTTP != 200: retry with exponential backoff (3 attempts, e.g. 1 s / 4 s / 16 s). On final failure, write the failed batch to a `.tsv.failed-<timestamp>` file and continue — don't lose work. Subsequent runs can replay these files.
+- Flush any remainder at end of stream.
 
-`clickhouse-client` streams stdin directly into batched INSERTs; we don't need to tune `max_insert_block_size` for our volume (10 M rows inserts in one or two parts).
+Why 10K–50K:
+- Smaller batches → more HTTP overhead, but more granular crash recovery.
+- Larger batches → fewer round-trips, larger parts in the MergeTree, but more work lost on a mid-batch crash.
+- 25K rows per POST is ~2.5 MB of TSV — well within ClickHouse's default `max_http_post_body_size`, and ~400 POSTs total for the full run.
 
-### 3.4 Full pipeline
-
-The `load-physical-size.sh` driver will pipe all three stages so no intermediate file is required. Optional `tee` to `physical_sizes.tsv` preserves a local artifact for replay without re-walking.
+### 3.3 Full pipeline
 
 ```bash
 RUN_ID="c915d505-3f5b-4bae-963b-c521b7fd63e3-1776679196233"
 
 curl -s "http://localhost:8123/?user=symphony&password=symphony&default_format=TabSeparated" \
   --data-binary "SELECT run_id, file_uri FROM symphony.scan_results WHERE run_id='$RUN_ID' AND filename != ''" \
-| pwsh -NoProfile -File ./probe-physical-size.ps1 \
-| tee physical_sizes.tsv \
-| curl -s "http://localhost:8123/?user=symphony&password=symphony&query=INSERT%20INTO%20symphony.file_physical%20FORMAT%20TabSeparated" \
-    --data-binary @-
+| pwsh -NoProfile -File ./probe-physical-size.ps1 -RunId "$RUN_ID"
 ```
 
-(`clickhouse-client` would be cleaner; curl works even if the client isn't installed on the Windows host.)
+No stdout pipe into ClickHouse — the walker owns inserts directly. `load-physical-size.sh` wraps the above plus the pre-flight checks (WSL up, ClickHouse `/ping`, table exists).
 
 ## 4. Throughput / resource budget
 
@@ -109,7 +112,7 @@ FROM symphony.scan_results sr
 LEFT ANY JOIN (
   SELECT run_id, file_uri, argMax(allocated, probed_at) AS allocated
   FROM symphony.file_physical
-  WHERE run_id = '$run_id' AND status = 'OK'
+  WHERE run_id = '$run_id'
   GROUP BY run_id, file_uri
 ) fp
   ON fp.run_id = sr.run_id AND fp.file_uri = sr.file_uri
@@ -134,7 +137,6 @@ PRIMARY KEY run_id, file_uri
 SOURCE(CLICKHOUSE(
     QUERY 'SELECT run_id, file_uri, argMax(allocated, probed_at) AS allocated
            FROM symphony.file_physical
-           WHERE status = ''OK''
            GROUP BY run_id, file_uri'
 ))
 LIFETIME(MIN 300 MAX 600)
@@ -173,28 +175,47 @@ Escalate to Option B only if actual panel latency in Grafana becomes a problem a
 - `ReplacingMergeTree(probed_at)` collapses duplicates on background merge; reads via `argMax(...)` are deterministic whether or not merge has run.
 - If we want to force a clean state for a `run_id` (e.g. walker had a bug): `ALTER TABLE symphony.file_physical DROP PARTITION '{RUN_ID}'` then re-walk.
 
-## 7. Validation queries (saved as `validation.sql`)
+## 7. Validation and progress queries (saved as `validation.sql`)
 
 ```sql
--- Coverage: should equal scan_results count (excluding directories)
-SELECT
-  (SELECT count() FROM symphony.scan_results WHERE run_id='$run_id' AND filename != '') AS expected,
-  (SELECT uniqExact(file_uri) FROM symphony.file_physical WHERE run_id='$run_id')        AS probed,
-  (SELECT countIf(status != 'OK') FROM symphony.file_physical WHERE run_id='$run_id')    AS non_ok;
-
--- Physical total — should land near the generator's ~1.2 TB
-SELECT
-  formatReadableSize(sum(allocated)) AS physical_total
+-- Progress (tail this while the walker runs)
+SELECT count() AS probed, min(probed_at) AS started, max(probed_at) AS latest
 FROM symphony.file_physical
-WHERE run_id = '$run_id' AND status = 'OK';
+WHERE run_id = '$run_id';
+-- Done-check: probed = 9,962,001
+```
 
--- Ratio check
+```sql
+-- Coverage: expected vs probed. Any shortfall = files the walker couldn't reach.
 SELECT
-  formatReadableSize((SELECT sum(size) FROM symphony.scan_results WHERE run_id='$run_id')) AS logical,
-  formatReadableSize((SELECT sum(allocated) FROM symphony.file_physical WHERE run_id='$run_id' AND status='OK')) AS physical,
+  (SELECT count() FROM symphony.scan_results  WHERE run_id='$run_id' AND filename != '') AS expected,
+  (SELECT uniqExact(file_uri) FROM symphony.file_physical WHERE run_id='$run_id')        AS probed,
+  expected - probed AS missing;
+
+-- Which files are missing (set-difference against scan_results)
+SELECT file_uri
+FROM symphony.scan_results
+WHERE run_id = '$run_id'
+  AND filename != ''
+  AND file_uri NOT IN (
+    SELECT file_uri FROM symphony.file_physical WHERE run_id = '$run_id'
+  )
+LIMIT 100;
+```
+
+```sql
+-- Physical total — should land near the generator's ~1.2 TB
+SELECT formatReadableSize(sum(allocated)) AS physical_total
+FROM symphony.file_physical
+WHERE run_id = '$run_id';
+
+-- Logical vs physical ratio
+SELECT
+  formatReadableSize((SELECT sum(size) FROM symphony.scan_results  WHERE run_id='$run_id' AND filename!='')) AS logical,
+  formatReadableSize((SELECT sum(allocated) FROM symphony.file_physical WHERE run_id='$run_id'))            AS physical,
   round(
-    (SELECT sum(allocated) FROM symphony.file_physical WHERE run_id='$run_id' AND status='OK')
-    / (SELECT sum(size) FROM symphony.scan_results WHERE run_id='$run_id' AND filename!=''),
+    (SELECT sum(allocated) FROM symphony.file_physical WHERE run_id='$run_id')
+    / (SELECT sum(size) FROM symphony.scan_results  WHERE run_id='$run_id' AND filename!=''),
     4
   ) AS physical_over_logical;
 
@@ -204,7 +225,7 @@ SELECT
   count() AS files,
   formatReadableSize(sum(allocated)) AS bytes
 FROM symphony.file_physical
-WHERE run_id = '$run_id' AND status = 'OK'
+WHERE run_id = '$run_id'
 GROUP BY allocated
 ORDER BY allocated;
 ```

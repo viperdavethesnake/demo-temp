@@ -53,29 +53,28 @@ CREATE TABLE symphony.file_physical (
     run_id     String,
     file_uri   String,
     allocated  UInt64,
-    status     LowCardinality(String),  -- OK | MISSING | ERROR
-    probed_at  DateTime64(3) DEFAULT now64(3)
-) ENGINE = MergeTree
+    probed_at  DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(probed_at)
+PARTITION BY run_id
 ORDER BY (run_id, file_uri);
 ```
 
 - Same `ORDER BY` as `scan_results` so joins are efficient.
-- `status` lets dashboards decide whether to include partial runs; `ERROR` rows carry `allocated = 0`.
-- One row per `scan_results` row per probe. Re-probing the same `run_id` inserts new rows; if we care about deduping, we add a follow-up `OPTIMIZE` or switch to `ReplacingMergeTree(probed_at)`. Decide after first run.
+- `ReplacingMergeTree(probed_at)` + `PARTITION BY run_id` — safe re-probe (latest `probed_at` wins per key) and clean drop-old-run via `ALTER TABLE DROP PARTITION`.
+- **No status column.** Rows exist only for successful probes. Files the walker couldn't reach (deleted, permission error, Win32 failure) are found via set-difference against `scan_results` at validation time — simpler schema, same information. See `CLICKHOUSE.md` §2 for the full rationale.
 
 ### 3.2 Walker (`probe-physical-size.ps1`)
 
 PowerShell 7 script at `physical-size/probe-physical-size.ps1`.
 
-- **Input:** reads `(run_id, file_uri)` as TSV on stdin (streamed from `clickhouse-client`). Caller filters `WHERE filename != ''` to exclude the 2,692 directory rows.
-- **Output:** writes `(run_id, file_uri, allocated, status)` as TSV to stdout.
+- **Input:** reads `(run_id, file_uri)` as TSV on stdin (streamed from ClickHouse). Caller filters `WHERE filename != ''` to exclude the 2,692 directory rows.
+- **Output:** inserts directly into ClickHouse via batched HTTP POSTs — the walker owns writes, nothing comes back on stdout.
 - **Path conversion:** `win://<host>/<drive>/<rest>` → `<drive>:\<rest-with-\-and-URL-decoded>`. Max URI length in the dataset is 144 chars — `\\?\` prefix not required here, but the walker should still emit it for paths > 248 chars so the same code survives a future customer scan.
 - **API:** P/Invoke `GetCompressedFileSizeW`. Already validated in `tmp/physical-size-probe.ps1`.
 - **Parallelism:** `ForEach-Object -Parallel -ThrottleLimit 8`. Disk is NVMe; Win32 metadata calls are cheap but the file set is 10 M, so parallelism matters.
-- **Error handling:**
-  - File not found → emit row with `status=MISSING`, `allocated=0`.
-  - Win32 error → emit row with `status=ERROR`, `allocated=0`. Log the error code to a sidecar log file; do not let one bad path stop the run.
-- **Checkpointing:** write output incrementally (flush every N rows). If the walker dies, next run can resume by joining against rows already in `file_physical` and probing only the missing `file_uri`s.
+- **Batched inserts:** buffer successful probes in memory, flush every **10,000–50,000 rows** (target 25,000) via HTTP POST to `http://localhost:8123/?query=INSERT+INTO+symphony.file_physical+FORMAT+TabSeparated` with Basic auth `symphony:symphony`. Retry with exponential backoff (3 attempts: 1 s / 4 s / 16 s); on final failure, dump the batch to `physical_sizes.failed-<ts>.tsv` and continue. See `CLICKHOUSE.md` §3.2.
+- **Error handling:** file-not-found and Win32 errors are logged to a sidecar log file and the row is skipped — no "error" row is written. Missing files are reconstructed at validation time via set-diff against `scan_results`.
 - **Throughput budget:** target < 30 min for 10 M files. If we overshoot, switch to a small .NET tool — same APIs, lower overhead per call.
 
 ### 3.3 Load script (`load-physical-size.sh`)
@@ -110,10 +109,12 @@ clickhouse-client -q "SELECT run_id, file_uri FROM symphony.scan_results WHERE r
 
 ## 4. Validation / acceptance
 
-1. Row count in `file_physical` equals row count in `scan_results` for the same `run_id`, ± `MISSING`/`ERROR`.
-2. `sum(allocated)` lands within 5 % of 1.2 TB (the generator's stated physical total).
+Queries live in `CLICKHOUSE.md` §7; acceptance bar:
+
+1. **Done-check:** `count() FROM symphony.file_physical WHERE run_id='$run_id'` = **9,962,001**.
+2. `sum(allocated)` lands within ~5 % of 1.2 TB (the generator's stated physical total).
 3. Spot-check: re-run the 20-file probe on the same URIs and confirm `allocated` matches what's in the table.
-4. Count of `status != 'OK'` rows is < 0.1 % of the total (lab disk is stable; anything higher implies a walker bug, not data rot).
+4. Set-diff (expected vs probed) yields fewer than ~10,000 missing files (< 0.1 %). Anything higher implies a walker bug, not data rot.
 
 ## 5. Risks & open questions
 
