@@ -110,3 +110,38 @@ Ordered for the next pass:
 5. Add dept-bytes viz (0d). Treemap vs stacked bar TBD.
 
 Items 1–3 are this pass; 4–5 next. `migrated` tile dropped to Phase 2.
+
+---
+
+## 2026-04-20 — Phase 1 apply #1 (commit `fc65bbeb`)
+
+Pushed items 1–3 to sym-exec. Render report from Claude Code:
+
+| Change | Expected | Actual | Status |
+|---|---|---|---|
+| B tile added | ~92.56%, red | 92.6%, red | ✅ shipped |
+| W tile (unchanged) | ~4.06% | 4.06% orange | ✅ |
+| Age Band pie config | 4 labelled slices + legend | Frozen 74% / Cold 19% / Warm 4% / Active 3%, donut, legend with values+% | ✅ shipped |
+| Oldest Modified fieldConfig | "N years ago" | "No data" (unchanged) | ❌ not fixed |
+
+### Oldest Modified root cause
+
+The ClickHouse plugin returns `min(modified)` as a typed time field. The stat panel's default reducer filters to numeric fields and drops the time column before any unit formatter applies — "No data" is the stat-panel fallback when zero numeric fields remain. `fieldConfig.defaults.unit = "dateTimeFromNow"` alone doesn't fix it because the field was already discarded.
+
+### Fix #2 queued (commit next)
+
+Change the rawSql on panel id=4 from `SELECT min(modified) AS oldest` to `SELECT toUnixTimestamp64Milli(min(modified)) AS oldest`. Int64 ms-since-epoch survives the numeric-field filter; `dateTimeFromNow` unit then formats it as "N years ago". Panel config unchanged beyond the unit. One-line SQL change.
+
+### Cross-dashboard consistency note
+
+Age Band pie on sym-exec reads Frozen (3y+) = 74% **by `modified`**. findings.md headline says 69.5% dormant **by `last_accessed`**. Both correct for their definition — write-cold is a larger population than read-cold here (files get read but not modified). This is Phase 0 issue #1. Flagging again so we don't quote the wrong number in a VAR report. Final alignment call still pending.
+
+### Sanity check on pie totals
+
+Pie legend values: 57.4 + 14.9 + 3.12 + 2.52 = 77.94 TiB. Matches overview.csv total of 77.87 TiB within rounding. ✅
+
+---
+
+## 2026-04-20 — Phase 1 apply #2 (this commit)
+
+One-line SQL change on sym-exec panel id=4 to fix Oldest Modified. Items 4–5 not in this commit — separate concern, separate push.
